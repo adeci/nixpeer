@@ -6,7 +6,7 @@ use iroh::{
 use n0_error::{Result, StdResultExt};
 use std::sync::Arc;
 
-const ALPN: &[u8] = b"nixpeer/compare/0";
+const ALPN: &[u8] = b"nixdelta/compare/0";
 
 /// Maximum summary size we'll accept (1 MiB).
 const MAX_SUMMARY_SIZE: usize = 1024 * 1024;

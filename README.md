@@ -1,4 +1,4 @@
-# nixpeer
+# nixdelta
 
 Compare NixOS systems, locally or peer-to-peer.
 
@@ -6,7 +6,7 @@ Extracts system-level artifacts — systemd services, users, groups, firewall
 ports, nginx vhosts, packages, and etc files — and diffs them between two
 NixOS configurations or two live NixOS machines over encrypted P2P.
 
-Unlike derivation-level tools (`nix-diff`, `nvd`), nixpeer shows you *what your
+Unlike derivation-level tools (`nix-diff`, `nvd`), nixdelta shows you *what your
 config change means* — not which store paths changed, but which services got
 added, which ports opened, which users were created.
 
@@ -16,13 +16,13 @@ added, which ports opened, which users were created.
 
 On machine A:
 ```bash
-nixpeer share
+nixdelta share
 # prints a ticket
 ```
 
 On machine B:
 ```bash
-nixpeer compare <ticket>
+nixdelta compare <ticket>
 ```
 
 Both sides see the diff. No source code, no flakes, no root access — just the
@@ -32,17 +32,17 @@ traversal (powered by [iroh](https://iroh.computer)).
 ### Compare two NixOS configurations locally
 
 ```bash
-nixpeer diff .#nixosConfigurations.old .#nixosConfigurations.new
+nixdelta diff .#nixosConfigurations.old .#nixosConfigurations.new
 ```
 
 ### Mix and match
 
 ```bash
-nixpeer share .#nixosConfigurations.myhost
-nixpeer compare <ticket> .#nixosConfigurations.myhost
+nixdelta share .#nixosConfigurations.myhost
+nixdelta compare <ticket> .#nixosConfigurations.myhost
 ```
 
-When a flake ref is given, nixpeer evaluates it with `nix eval`. When omitted,
+When a flake ref is given, nixdelta evaluates it with `nix eval`. When omitted,
 it reads directly from the nix store on the running system.
 
 ## Example output
@@ -78,7 +78,7 @@ it reads directly from the nix store on the running system.
 ## How it works
 
 NixOS compiles your entire system declaration into immutable store artifacts
-linked from `/run/current-system`. nixpeer reads these directly — no runtime
+linked from `/run/current-system`. nixdelta reads these directly — no runtime
 queries, no root access, no scanning:
 
 - **Systemd units** — from the store-linked `/run/current-system/etc/systemd/system`
@@ -112,7 +112,7 @@ traversal. Both peers see the diff.
 ## Install
 
 ```bash
-nix run github:adeci/nixpeer
+nix run github:adeci/nixdelta
 ```
 
 ## Build from source

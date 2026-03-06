@@ -14,10 +14,10 @@ use std::process;
 /// configurations and diff them — either between two local flake refs or across
 /// the network with another NixOS user via iroh P2P.
 ///
-/// When a flake ref is omitted, nixpeer extracts from the currently running
+/// When a flake ref is omitted, nixdelta extracts from the currently running
 /// NixOS system — no source code needed.
 #[derive(Parser)]
-#[command(name = "nixpeer", version)]
+#[command(name = "nixdelta", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -57,6 +57,17 @@ enum Command {
         ticket: String,
         /// Flake reference (omit to use the running system).
         flake_ref: Option<String>,
+    },
+
+    /// Compare two NixOS generations on this machine.
+    ///
+    /// Shows what changed between system generations (e.g. after nixos-rebuild).
+    /// If only one generation is given, compares it against the current system.
+    Generations {
+        /// First generation number.
+        before: u64,
+        /// Second generation number (omit to compare against current system).
+        after: Option<u64>,
     },
 }
 
@@ -162,6 +173,40 @@ fn main() {
 
             let changes = diff::diff(&summary, &peer_summary);
             show_diff(&summary, &peer_summary, &changes, cli.json);
+        }
+
+        Command::Generations { before, after } => {
+            let before_summary = match live::extract_generation(before) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    process::exit(1);
+                }
+            };
+
+            let after_summary = match after {
+                Some(g) => match live::extract_generation(g) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        process::exit(1);
+                    }
+                },
+                None => match live::extract_live() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        process::exit(1);
+                    }
+                },
+            };
+
+            let before_label = format!("gen {before}");
+            let after_label = after.map_or("current".into(), |g| format!("gen {g}"));
+            eprintln!("{before_label} → {after_label}");
+
+            let changes = diff::diff(&before_summary, &after_summary);
+            show_diff(&before_summary, &after_summary, &changes, cli.json);
         }
 
         Command::Compare { ticket, flake_ref } => {

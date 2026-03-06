@@ -20,8 +20,8 @@
     {
       packages = forAllSystems (pkgs: {
         default = pkgs.rustPlatform.buildRustPackage {
-          pname = "nixpeer";
-          version = "0.1.0";
+          pname = "nixdelta";
+          version = "0.1.1";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
 

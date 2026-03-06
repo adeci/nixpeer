@@ -2024,8 +2024,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "nixpeer"
-version = "0.1.0"
+name = "nixdelta"
+version = "0.1.1"
 dependencies = [
  "clap",
  "data-encoding",

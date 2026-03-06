@@ -1,6 +1,6 @@
 [package]
-name = "nixpeer"
-version = "0.1.0"
+name = "nixdelta"
+version = "0.1.1"
 edition = "2024"
 description = "Compare NixOS systems, locally or peer-to-peer"
 license = "MIT"

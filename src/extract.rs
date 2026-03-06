@@ -94,6 +94,9 @@ pub enum ExtractError {
 
     #[error("not a NixOS system (no /run/current-system)")]
     NotNixOS,
+
+    #[error("generation {0} not found")]
+    GenerationNotFound(u64),
 }
 
 /// Evaluate a NixOS configuration and extract its system summary.

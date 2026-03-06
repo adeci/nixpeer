@@ -14,9 +14,25 @@ use std::path::Path;
 /// The system closure root — a symlink into the nix store.
 const SYSTEM_ROOT: &str = "/run/current-system";
 
+/// The system profile directory containing generation links.
+const PROFILE_DIR: &str = "/nix/var/nix/profiles";
+
 /// Extract a system summary from the live NixOS system.
 pub fn extract_live() -> Result<SystemSummary, ExtractError> {
-    let root = Path::new(SYSTEM_ROOT);
+    extract_from_root(Path::new(SYSTEM_ROOT))
+}
+
+/// Extract a system summary from a specific generation number.
+pub fn extract_generation(generation: u64) -> Result<SystemSummary, ExtractError> {
+    let link = Path::new(PROFILE_DIR).join(format!("system-{generation}-link"));
+    if !link.exists() {
+        return Err(ExtractError::GenerationNotFound(generation));
+    }
+    extract_from_root(&link)
+}
+
+/// Extract a system summary from any system root path (current system or generation link).
+fn extract_from_root(root: &Path) -> Result<SystemSummary, ExtractError> {
     if !root.exists() {
         return Err(ExtractError::NotNixOS);
     }
