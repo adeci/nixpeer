@@ -1,23 +1,19 @@
 # nixdelta
 
-Compare NixOS systems, locally or peer-to-peer.
+Compare NixOS systems — across machines, generations, or flake configs.
 
-Extracts system-level artifacts — systemd services, users, groups, firewall
-ports, nginx vhosts, packages, and etc files — and diffs them between two
-NixOS configurations or two live NixOS machines over encrypted P2P.
+Extracts system-level declarations — services, users, groups, firewall ports,
+packages, nginx vhosts, and etc files — and diffs them. Unlike derivation-level
+tools (`nix-diff`, `nvd`), nixdelta shows you *what changed* in human terms:
+which services got added, which ports opened, which users were created.
 
-Unlike derivation-level tools (`nix-diff`, `nvd`), nixdelta shows you *what your
-config change means* — not which store paths changed, but which services got
-added, which ports opened, which users were created.
+## P2P comparison
 
-## Usage
-
-### Compare two live NixOS systems over P2P
+Compare two live NixOS machines over encrypted P2P. No config repos, no root.
 
 On machine A:
 ```bash
 nixdelta share
-# prints a ticket
 ```
 
 On machine B:
@@ -25,102 +21,103 @@ On machine B:
 nixdelta compare <ticket>
 ```
 
-Both sides see the diff. No source code, no flakes, no root access — just the
-running system. Connections are encrypted end-to-end via QUIC with NAT
-traversal (powered by [iroh](https://iroh.computer)).
+Both sides see the diff. Connections are encrypted end-to-end via QUIC with
+NAT traversal (powered by [iroh](https://iroh.computer)).
 
-### Compare two NixOS configurations locally
+## Generation comparison
 
-```bash
-nixdelta diff .#nixosConfigurations.old .#nixosConfigurations.new
-```
-
-### Mix and match
+Compare system generations on the same machine:
 
 ```bash
-nixdelta share .#nixosConfigurations.myhost
-nixdelta compare <ticket> .#nixosConfigurations.myhost
+nixdelta generations 215 220
 ```
 
-When a flake ref is given, nixdelta evaluates it with `nix eval`. When omitted,
-it reads directly from the nix store on the running system.
+Compare a generation against the current running system:
+
+```bash
+nixdelta generations 215
+```
+
+List available generations with `nix profile history --profile /nix/var/nix/profiles/system`.
+
+## Flake comparison
+
+Compare two NixOS configurations from flake refs:
+
+```bash
+nixdelta diff .#nixosConfigurations.laptop .#nixosConfigurations.server
+```
+
+Compare across commits in your dotfiles:
+
+```bash
+nixdelta diff \
+  'github:you/dotfiles/abc123#nixosConfigurations.host' \
+  'github:you/dotfiles/def456#nixosConfigurations.host'
+```
+
+## JSON export
+
+Any command supports `--json` for structured output:
+
+```bash
+nixdelta generations 215 220 --json
+nixdelta compare --json <ticket>
+```
 
 ## Example output
 
 ```
-  peer → local  (12 changes across 4 sections)
+  praxis (26.05.20260303) → leviathan (26.05.20260303)  (186 changes across 7 sections)
 
   systemd services
 
-    + matrix-synapse  Synapse Matrix homeserver
-    + vaultwarden
-    - buildbot-master
-    - harmonia-dev
+    + nginx             Nginx Web Server
+    + postgresql        PostgreSQL Server
+    - cups
+    - bluetooth
 
   users
 
-    + matrix-synapse  service, uid=224, group=matrix-synapse
-    + vaultwarden  system, group=vaultwarden
-    - buildbot
+    + postgres  normal, uid=71, group=postgres
+    + nginx     system, uid=60, group=nginx
+    - avahi
+    - rtkit
 
   firewall
 
-    + tcp/3012
-    + tcp/8222
+    + tcp/443
+    + tcp/80
 
-  nginx vhosts
+  environment packages
 
-    + matrix
-    + well-known-matrix
-    - buildbot.example.com
+    + postgresql-and-plugins-17.8
+    - steam-1.0.0.85
+    - obs-studio-32.0.4
 ```
 
 ## How it works
 
 NixOS compiles your entire system declaration into immutable store artifacts
 linked from `/run/current-system`. nixdelta reads these directly — no runtime
-queries, no root access, no scanning:
+queries, no root access:
 
-- **Systemd units** — from the store-linked `/run/current-system/etc/systemd/system`
-- **Users & groups** — from `users-groups.json` in the nix store, the same
-  JSON spec NixOS uses during activation to create users
-- **Firewall ports** — parsed from the declared `firewall-start` script in the
-  store, not from live iptables state
-- **Packages** — direct references of `/run/current-system/sw` (what you
-  declared, not the transitive closure)
-- **Etc files** — from the store-linked `/run/current-system/etc`
+- **Systemd units** — from store-linked `/run/current-system/etc/systemd/system`
+- **Users & groups** — from `users-groups.json` in the store (the same spec NixOS uses during activation)
+- **Firewall ports** — parsed from the declared `firewall-start` script, not live iptables
+- **Packages** — direct references of `/run/current-system/sw` (what you declared, not the transitive closure)
+- **Etc files** — from store-linked `/run/current-system/etc`
 - **Nginx vhosts** — from the store-generated `nginx.conf`
 
-For flake-based comparison, a Nix expression (`extract.nix`) is applied to the
-config via `nix eval --json`, producing the same summary format.
+Generation comparison uses the same logic against `/nix/var/nix/profiles/system-N-link`.
 
-Summaries are exchanged over iroh — encrypted QUIC with relay-assisted NAT
-traversal. Both peers see the diff.
-
-## What it extracts
-
-- **Systemd services** — names, descriptions, modification detection
-- **Systemd timers**
-- **Users** — uid, group, system/normal, modification detection
-- **Groups**
-- **Firewall** — enabled state, declared TCP/UDP ports
-- **Nginx virtual hosts**
-- **Environment packages** — declared system packages
-- **Etc files** — NixOS-managed /etc entries
-- **PostgreSQL** — enabled state
+For flake-based comparison, `extract.nix` is applied to the config via
+`nix eval --json`, producing the same summary format.
 
 ## Install
 
 ```bash
 nix run github:adeci/nixdelta
-```
-
-## Build from source
-
-```bash
-nix build
-# or
-nix develop -c cargo build
 ```
 
 ## License
