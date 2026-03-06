@@ -4,10 +4,39 @@ use std::path::Path;
 use std::process::Command;
 use thiserror::Error;
 
+/// Machine identity metadata.
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "kebab-case")]
+pub struct MachineInfo {
+    pub hostname: String,
+    pub nixos_version: String,
+    pub system: String,
+}
+
+impl MachineInfo {
+    /// Short display label: "hostname (version)" or just "hostname".
+    pub fn label(&self) -> String {
+        if self.nixos_version.is_empty() {
+            self.hostname.clone()
+        } else {
+            // Trim the version to just the release + date, e.g. "26.05.20260303"
+            let short_ver = self
+                .nixos_version
+                .split('.')
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(".");
+            format!("{} ({})", self.hostname, short_ver)
+        }
+    }
+}
+
 /// Summary of system-level artifacts extracted from a NixOS configuration.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct SystemSummary {
+    #[serde(default)]
+    pub machine: MachineInfo,
     pub systemd_services: BTreeMap<String, ServiceInfo>,
     pub systemd_timers: Vec<String>,
     pub users: BTreeMap<String, UserInfo>,

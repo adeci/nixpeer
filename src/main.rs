@@ -25,6 +25,10 @@ struct Cli {
     /// Path to the extractor Nix expression (only needed for flake refs).
     #[arg(long, global = true)]
     extractor: Option<PathBuf>,
+
+    /// Output results as JSON instead of colored text.
+    #[arg(long, global = true)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -101,11 +105,31 @@ fn get_summary(flake_ref: &Option<String>, extractor: &Option<PathBuf>) -> extra
     }
 }
 
-fn show_diff(before_label: &str, after_label: &str, changes: &[diff::ChangeSection]) {
-    if changes.is_empty() {
+fn show_diff(
+    before: &extract::SystemSummary,
+    after: &extract::SystemSummary,
+    changes: &[diff::ChangeSection],
+    json: bool,
+) {
+    if json {
+        let output = display::json_changes(before, after, changes);
+        println!("{output}");
+    } else if changes.is_empty() {
         eprintln!("no changes detected");
     } else {
-        display::print_changes(before_label, after_label, changes);
+        let before_label = before.machine.label();
+        let after_label = after.machine.label();
+        let before_label = if before_label.is_empty() {
+            "before".into()
+        } else {
+            before_label
+        };
+        let after_label = if after_label.is_empty() {
+            "after".into()
+        } else {
+            after_label
+        };
+        display::print_changes(&before_label, &after_label, changes);
     }
 }
 
@@ -117,7 +141,7 @@ fn main() {
             let before_summary = get_summary(&Some(before.clone()), &cli.extractor);
             let after_summary = get_summary(&Some(after.clone()), &cli.extractor);
             let changes = diff::diff(&before_summary, &after_summary);
-            show_diff(&before, &after, &changes);
+            show_diff(&before_summary, &after_summary, &changes, cli.json);
         }
 
         Command::Share { flake_ref } => {
@@ -137,7 +161,7 @@ fn main() {
                 serde_json::from_slice(&peer_json).expect("failed to parse peer summary");
 
             let changes = diff::diff(&summary, &peer_summary);
-            show_diff("local", "peer", &changes);
+            show_diff(&summary, &peer_summary, &changes, cli.json);
         }
 
         Command::Compare { ticket, flake_ref } => {
@@ -157,7 +181,7 @@ fn main() {
                 serde_json::from_slice(&peer_json).expect("failed to parse peer summary");
 
             let changes = diff::diff(&peer_summary, &my_summary);
-            show_diff("peer", "local", &changes);
+            show_diff(&peer_summary, &my_summary, &changes, cli.json);
         }
     }
 }

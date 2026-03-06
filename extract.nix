@@ -16,6 +16,13 @@ let
   };
 in
 {
+  # Machine identity
+  machine = {
+    hostname = config.networking.hostName or "";
+    nixos-version = config.system.nixos.version or "";
+    system = config.nixpkgs.hostPlatform.system or "";
+  };
+
   # Systemd services and their basic metadata
   systemd-services = builtins.mapAttrs serviceInfo config.systemd.services;
 

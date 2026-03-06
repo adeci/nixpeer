@@ -5,7 +5,7 @@
 //! that NixOS built.
 
 use crate::extract::{
-    ExtractError, FirewallInfo, PostgresqlInfo, ServiceInfo, SystemSummary, UserInfo,
+    ExtractError, FirewallInfo, MachineInfo, PostgresqlInfo, ServiceInfo, SystemSummary, UserInfo,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -25,6 +25,7 @@ pub fn extract_live() -> Result<SystemSummary, ExtractError> {
     let etc_dir = resolve_etc_dir(root);
 
     Ok(SystemSummary {
+        machine: extract_machine_info(root, &etc_dir),
         systemd_services: extract_services(&unit_dir),
         systemd_timers: extract_timers(&unit_dir),
         users: extract_users(root),
@@ -47,6 +48,27 @@ fn resolve_units_dir(root: &Path) -> std::path::PathBuf {
 fn resolve_etc_dir(root: &Path) -> std::path::PathBuf {
     // /run/current-system/etc → /nix/store/xxx-etc/etc
     root.join("etc")
+}
+
+fn extract_machine_info(root: &Path, etc_dir: &Path) -> MachineInfo {
+    let hostname = fs::read_to_string(etc_dir.join("hostname"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let nixos_version = fs::read_to_string(root.join("nixos-version"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let system = fs::read_to_string(root.join("system"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    MachineInfo {
+        hostname,
+        nixos_version,
+        system,
+    }
 }
 
 fn extract_services(unit_dir: &Path) -> BTreeMap<String, ServiceInfo> {

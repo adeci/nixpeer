@@ -106,12 +106,14 @@ impl ProtocolHandler for ShareHandler {
         send.finish()?;
         let peer_data = recv_msg(&mut recv).await?;
 
-        // Send peer data back to the caller
+        // Wait for the peer to close the connection (meaning it finished reading)
+        connection.closed().await;
+
+        // Only signal done after the peer has confirmed receipt
         if let Some(tx) = self.done.lock().await.take() {
             tx.send(peer_data).ok();
         }
 
-        connection.closed().await;
         Ok(())
     }
 }
