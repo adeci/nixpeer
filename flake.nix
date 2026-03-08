@@ -24,10 +24,6 @@
           version = "0.2.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
-
-          postInstall = ''
-            cp ${./extract.nix} $out/bin/extract.nix
-          '';
         };
       });
 

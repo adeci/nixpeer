@@ -11,7 +11,8 @@ were created, which packages landed.
 - preview what a rebuild would change before you switch
 - review what the last rebuild changed after you switch
 - compare any two generations, flake configs, or store paths
-- reads directly from the nix store, no evaluation needed
+- reads directly from the nix store
+- detects modified etc files via store path comparison
 - JSON output for scripting
 - usable as a Rust library
 
@@ -71,7 +72,7 @@ $ nixdelta preview /nix/store/...-nixos-system-myhost-26.05
 
 ```console
 $ nixdelta report
-  gen 219 → gen 220 (current)  (2 changes across 2 sections)
+  gen 218 → gen 220 (current)  (13 changes across 3 sections)
 
   systemd services
 
@@ -80,13 +81,21 @@ $ nixdelta report
   environment packages
 
     + iio-sensor-proxy-3.8
+
+  etc files
+
+    ~ dbus-1  contents changed
+    ~ fish/generated_completions  contents changed
+    ~ systemd/system  contents changed
+    ~ systemd/user  contents changed
+    ~ udev/hwdb.bin  contents changed
 ```
 
 ### Compare generations
 
 ```console
 $ nixdelta generations 215 220
-  gen 215 → gen 220  (3 changes across 2 sections)
+  gen 215 → gen 220  (10 changes across 3 sections)
 
   systemd services
 
@@ -96,6 +105,14 @@ $ nixdelta generations 215 220
   environment packages
 
     + modem-manager-gui-0.0.20
+
+  etc files
+
+    ~ dbus-1  contents changed
+    ~ fish/generated_completions  contents changed
+    ~ systemd/system  contents changed
+    ~ udev/hwdb.bin  contents changed
+    ~ udev/rules.d  contents changed
 ```
 
 Omit the second generation to compare against current:
@@ -108,7 +125,7 @@ $ nixdelta generations 215
 
 ```console
 $ nixdelta diff .#nixosConfigurations.praxis .#nixosConfigurations.leviathan
-  praxis (26.05.20260303) → leviathan (26.05.20260303)  (159 changes across 8 sections)
+  praxis (26.05.20260303) → leviathan (26.05.20260303)  (190 changes across 6 sections)
 
   systemd services
 
@@ -134,10 +151,6 @@ $ nixdelta diff .#nixosConfigurations.praxis .#nixosConfigurations.leviathan
     + tcp/80
     - tcp/631
 
-  nginx vhosts
-
-    + buildbot.decio.us                                           - localhost
-
   environment packages
 
     + envfs-1.1.0                                                 - blender-5.0.1
@@ -145,11 +158,15 @@ $ nixdelta diff .#nixosConfigurations.praxis .#nixosConfigurations.leviathan
                                                                   - steam-1.0.0.85
                                                                   - vesktop-1.6.5
 
-  postgresql
+  etc files
 
-    ~ postgresql  disabled → enabled
-    + database: buildbot
-    + user: buildbot
+    ~ dbus-1  contents changed
+    ~ nix/nix.conf  contents changed
+    ~ ssh/sshd_config  contents changed
+    + ssh/authorized_keys.d/brittonr
+    + ssh/authorized_keys.d/fmzakari                              - bluetooth/main.conf
+                                                                  - cups
+                                                                  - pipewire
 ```
 
 ### JSON output
@@ -161,7 +178,7 @@ $ nixdelta generations 215 220 --json
 {
   "before": "gen 215",
   "after": "gen 220",
-  "total_changes": 3,
+  "total_changes": 10,
   "sections": [
     {
       "name": "systemd services",
@@ -179,6 +196,14 @@ $ nixdelta generations 215 220 --json
       "changes": [
         { "kind": "added", "name": "modem-manager-gui-0.0.20" }
       ]
+    },
+    {
+      "name": "etc files",
+      "changes": [
+        { "kind": "modified", "name": "dbus-1", "detail": "contents changed" },
+        { "kind": "modified", "name": "systemd/system", "detail": "contents changed" },
+        { "kind": "modified", "name": "udev/rules.d", "detail": "contents changed" }
+      ]
     }
   ]
 }
@@ -186,9 +211,9 @@ $ nixdelta generations 215 220 --json
 
 ## How it reads the store
 
-For generation comparisons, previews, and store paths, nixdelta reads the
-same artifacts NixOS uses during activation. No evaluation needed. The `diff`
-command and `preview` with a flake ref will evaluate/build as needed.
+All commands read from the nix store. When given a flake ref, nixdelta builds
+the toplevel first, then reads from the result. Same artifacts NixOS uses
+during activation.
 
 <details>
 <summary><b>Systemd units</b></summary>
@@ -278,22 +303,23 @@ direct package references, what you declared, not the transitive closure:
 <details>
 <summary><b>Etc files</b></summary>
 
-Walks `/run/current-system/etc/` and collects file paths, skipping NixOS
-metadata (`.uid`, `.gid`, `.mode` files).
+Walks `/run/current-system/etc/` and records each file's symlink target.
+Since etc entries are symlinks into the nix store, two systems with the same
+file pointing to different store paths means the contents changed. No need
+to read or hash file contents.
+
+```
+  etc files
+
+    ~ etc/nginx/nginx.conf  contents changed
+    ~ etc/ssh/sshd_config   contents changed
+    + etc/postgresql/pg_hba.conf
+```
 
 </details>
 
-<details>
-<summary><b>Nginx vhosts</b></summary>
-
-Parses `server_name` directives from the store-generated
-`/run/current-system/etc/nginx/nginx.conf`.
-
-</details>
-
-Generation comparison uses the same approach on
-`/nix/var/nix/profiles/system-N-link`. Preview reads `./result` or any store
-path. The `diff` command is the only one that evaluates nix (via `extract.nix`).
+All commands use the same store-reading approach. `preview` and `diff` with
+flake refs build the toplevels first, then read from the resulting store paths.
 
 ## Credits
 

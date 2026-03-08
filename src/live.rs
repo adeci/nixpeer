@@ -1,27 +1,21 @@
 //! Extract a SystemSummary directly from the nix store.
 //!
-//! Reads system closures via their store-linked root paths — no nix evaluation,
-//! no root access, no runtime state. Just the declarative artifacts that NixOS
-//! built.
-//!
-//! Works with any system root: `/run/current-system`, generation profile links,
-//! or build results like `./result`.
+//! Reads system closures via their store-linked root paths. Works with any
+//! system root: `/run/current-system`, generation profile links, built
+//! closures, or raw store paths.
 
 use crate::extract::{
-    ExtractError, FirewallInfo, MachineInfo, PostgresqlInfo, ServiceInfo, SystemSummary, UserInfo,
+    ExtractError, FirewallInfo, MachineInfo, ServiceInfo, SystemSummary, UserInfo,
 };
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-/// The system closure root — a symlink into the nix store.
 const SYSTEM_ROOT: &str = "/run/current-system";
-
-/// The system profile directory containing generation links.
 const PROFILE_DIR: &str = "/nix/var/nix/profiles";
 
 // ---------------------------------------------------------------------------
-// Public extraction entry points
+// Public entry points
 // ---------------------------------------------------------------------------
 
 /// Extract a summary from the currently running system.
@@ -39,9 +33,6 @@ pub fn extract_generation(generation: u64) -> Result<SystemSummary, ExtractError
 }
 
 /// Extract a summary from any system closure path.
-///
-/// Accepts anything that looks like a NixOS system root: a `./result` symlink
-/// from `nixos-rebuild build`, a generation profile link, or a raw store path.
 pub fn extract_system(path: &Path) -> Result<SystemSummary, ExtractError> {
     extract_from_root(path)
 }
@@ -83,7 +74,7 @@ fn parse_generation_number(name: &str) -> Option<u64> {
 }
 
 // ---------------------------------------------------------------------------
-// Core extraction from a system root
+// Core extraction
 // ---------------------------------------------------------------------------
 
 fn extract_from_root(root: &Path) -> Result<SystemSummary, ExtractError> {
@@ -101,15 +92,13 @@ fn extract_from_root(root: &Path) -> Result<SystemSummary, ExtractError> {
         users: extract_users(root),
         groups: extract_groups(root),
         firewall: extract_firewall(&unit_dir),
-        nginx_vhosts: extract_nginx_vhosts(&etc_dir),
         environment_packages: extract_packages(root),
         etc_files: extract_etc_files(&etc_dir),
-        postgresql: extract_postgresql(&unit_dir),
     })
 }
 
 // ---------------------------------------------------------------------------
-// Individual extractors
+// Extractors
 // ---------------------------------------------------------------------------
 
 fn extract_machine_info(root: &Path, etc_dir: &Path) -> MachineInfo {
@@ -200,10 +189,6 @@ fn extract_timers(unit_dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Parse the declarative users-groups.json from the system closure.
-///
-/// NixOS stores the full user/group specification as a JSON file in the nix
-/// store, referenced from the activation script.
 fn find_users_groups_json(root: &Path) -> Option<String> {
     let activate = fs::read_to_string(root.join("activate")).ok()?;
     activate
@@ -305,9 +290,6 @@ fn extract_groups(root: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Extract firewall ports from the declared firewall-start script in the store.
-///
-/// No iptables, no root — just reads the script that NixOS generated.
 fn extract_firewall(unit_dir: &Path) -> FirewallInfo {
     let fw_unit = unit_dir.join("firewall.service");
     let enabled = fw_unit.exists();
@@ -383,29 +365,7 @@ fn extract_dport(line: &str) -> Option<u16> {
     None
 }
 
-fn extract_nginx_vhosts(etc_dir: &Path) -> Vec<String> {
-    let nginx_conf = etc_dir.join("nginx/nginx.conf");
-    if let Ok(content) = fs::read_to_string(nginx_conf) {
-        let mut vhosts: Vec<String> = content
-            .lines()
-            .filter_map(|line| {
-                line.trim()
-                    .strip_prefix("server_name ")
-                    .map(|rest| rest.trim_end_matches(';').trim().to_string())
-            })
-            .collect();
-        vhosts.sort();
-        vhosts.dedup();
-        return vhosts;
-    }
-
-    Vec::new()
-}
-
 /// Get declared packages from the system path's direct store references.
-///
-/// Uses `nix-store --references` (not `-qR` which gives the transitive closure).
-/// Direct references = the packages NixOS was told to include.
 fn extract_packages(root: &Path) -> Vec<String> {
     let sw = root.join("sw");
     let output = match std::process::Command::new("nix-store")
@@ -439,18 +399,19 @@ fn extract_packages(root: &Path) -> Vec<String> {
     packages
 }
 
-fn extract_etc_files(etc_dir: &Path) -> Vec<String> {
-    if !etc_dir.exists() {
-        return Vec::new();
+/// Collect etc files with their store targets for modification detection.
+///
+/// Etc entries are symlinks into the nix store. Two systems with the same
+/// file pointing to different store paths means the file was modified.
+fn extract_etc_files(etc_dir: &Path) -> BTreeMap<String, String> {
+    let mut files = BTreeMap::new();
+    if etc_dir.exists() {
+        collect_etc_files(etc_dir, "", &mut files);
     }
-
-    let mut files = Vec::new();
-    collect_etc_files(etc_dir, "", &mut files);
-    files.sort();
     files
 }
 
-fn collect_etc_files(dir: &Path, prefix: &str, files: &mut Vec<String>) {
+fn collect_etc_files(dir: &Path, prefix: &str, files: &mut BTreeMap<String, String>) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -477,17 +438,13 @@ fn collect_etc_files(dir: &Path, prefix: &str, files: &mut Vec<String>) {
         if file_type.is_dir() {
             collect_etc_files(&entry.path(), &path, files);
         } else {
-            files.push(path);
+            // Resolve symlink target for modification detection.
+            // If it's a symlink, use the target path. Otherwise use a
+            // content hash proxy (the file path itself as a fallback).
+            let target = fs::read_link(entry.path())
+                .map(|t| t.to_string_lossy().to_string())
+                .unwrap_or_default();
+            files.insert(path, target);
         }
-    }
-}
-
-fn extract_postgresql(unit_dir: &Path) -> PostgresqlInfo {
-    let enabled = unit_dir.join("postgresql.service").exists();
-
-    PostgresqlInfo {
-        enable: enabled,
-        ensure_databases: Vec::new(),
-        ensure_users: Vec::new(),
     }
 }

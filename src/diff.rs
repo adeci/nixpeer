@@ -1,4 +1,4 @@
-use crate::extract::{FirewallInfo, PostgresqlInfo, ServiceInfo, SystemSummary, UserInfo};
+use crate::extract::{FirewallInfo, ServiceInfo, SystemSummary, UserInfo};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A single section of changes (e.g., "systemd services", "users").
@@ -25,14 +25,12 @@ pub fn diff(before: &SystemSummary, after: &SystemSummary) -> Vec<ChangeSection>
         diff_users(&before.users, &after.users),
         diff_lists("groups", &before.groups, &after.groups),
         diff_firewall(&before.firewall, &after.firewall),
-        diff_lists("nginx vhosts", &before.nginx_vhosts, &after.nginx_vhosts),
         diff_lists(
             "environment packages",
             &before.environment_packages,
             &after.environment_packages,
         ),
-        diff_lists("etc files", &before.etc_files, &after.etc_files),
-        diff_postgresql(&before.postgresql, &after.postgresql),
+        diff_etc_files(&before.etc_files, &after.etc_files),
     ];
 
     candidates
@@ -160,21 +158,14 @@ fn diff_lists(name: &'static str, before: &[String], after: &[String]) -> Change
     ChangeSection { name, entries }
 }
 
-fn enabled_str(v: bool) -> &'static str {
-    if v { "enabled" } else { "disabled" }
-}
-
 fn diff_firewall(before: &FirewallInfo, after: &FirewallInfo) -> ChangeSection {
     let mut entries = Vec::new();
 
     if before.enable != after.enable {
+        let state = |v: bool| if v { "enabled" } else { "disabled" };
         entries.push(ChangeEntry::Modified(
             "firewall".to_string(),
-            format!(
-                "{} → {}",
-                enabled_str(before.enable),
-                enabled_str(after.enable)
-            ),
+            format!("{} → {}", state(before.enable), state(after.enable)),
         ));
     }
 
@@ -213,56 +204,35 @@ fn diff_port_set(entries: &mut Vec<ChangeEntry>, proto: &str, before: &[u16], af
     }
 }
 
-fn diff_postgresql(before: &PostgresqlInfo, after: &PostgresqlInfo) -> ChangeSection {
+/// Diff etc files with modification detection.
+///
+/// Etc entries are symlinks into the nix store. Same path with different
+/// store targets means the file contents changed.
+fn diff_etc_files(
+    before: &BTreeMap<String, String>,
+    after: &BTreeMap<String, String>,
+) -> ChangeSection {
     let mut entries = Vec::new();
 
-    if before.enable != after.enable {
-        entries.push(ChangeEntry::Modified(
-            "postgresql".to_string(),
-            format!(
-                "{} → {}",
-                enabled_str(before.enable),
-                enabled_str(after.enable),
-            ),
-        ));
+    for (path, target) in after {
+        match before.get(path) {
+            None => entries.push(ChangeEntry::Added(path.clone(), None)),
+            Some(old_target) => {
+                if old_target != target {
+                    entries.push(ChangeEntry::Modified(path.clone(), "contents changed".into()));
+                }
+            }
+        }
     }
 
-    diff_prefixed_lists(
-        &mut entries,
-        "database",
-        &before.ensure_databases,
-        &after.ensure_databases,
-    );
-    diff_prefixed_lists(
-        &mut entries,
-        "user",
-        &before.ensure_users,
-        &after.ensure_users,
-    );
+    for path in before.keys() {
+        if !after.contains_key(path) {
+            entries.push(ChangeEntry::Removed(path.clone(), None));
+        }
+    }
 
     ChangeSection {
-        name: "postgresql",
+        name: "etc files",
         entries,
-    }
-}
-
-fn diff_prefixed_lists(
-    entries: &mut Vec<ChangeEntry>,
-    prefix: &str,
-    before: &[String],
-    after: &[String],
-) {
-    let before_set: BTreeSet<_> = before.iter().collect();
-    let after_set: BTreeSet<_> = after.iter().collect();
-
-    for item in &after_set {
-        if !before_set.contains(item) {
-            entries.push(ChangeEntry::Added(format!("{prefix}: {item}"), None));
-        }
-    }
-    for item in &before_set {
-        if !after_set.contains(item) {
-            entries.push(ChangeEntry::Removed(format!("{prefix}: {item}"), None));
-        }
     }
 }

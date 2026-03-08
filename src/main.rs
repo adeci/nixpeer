@@ -10,16 +10,11 @@ use std::process;
 /// Preview and review NixOS system changes.
 ///
 /// Reads system-level declarations directly from the nix store.
-/// No evaluation, no root access.
 #[derive(Parser)]
 #[command(name = "nixdelta", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
-
-    /// Path to the extractor Nix expression (only needed for flake refs).
-    #[arg(long, global = true)]
-    extractor: Option<PathBuf>,
 
     /// Output results as JSON instead of colored text.
     #[arg(long, global = true)]
@@ -56,31 +51,15 @@ enum Command {
         after: Option<u64>,
     },
 
-    /// Compare two flake configurations.
+    /// Compare two NixOS configurations.
+    ///
+    /// Accepts flake refs or paths to system closures.
     Diff {
-        /// Flake reference for the "before" configuration.
+        /// First configuration (flake ref or store path).
         before: String,
-        /// Flake reference for the "after" configuration.
+        /// Second configuration (flake ref or store path).
         after: String,
     },
-}
-
-fn resolve_extractor(cli_path: &Option<PathBuf>) -> PathBuf {
-    if let Some(p) = cli_path {
-        return p.clone();
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        let beside_exe = exe.parent().unwrap().join("extract.nix");
-        if beside_exe.exists() {
-            return beside_exe;
-        }
-    }
-    let cwd = PathBuf::from("extract.nix");
-    if cwd.exists() {
-        return cwd;
-    }
-    eprintln!("error: could not find extract.nix — pass --extractor <path>");
-    process::exit(1);
 }
 
 /// Check if a string looks like a flake ref (contains #).
@@ -90,7 +69,6 @@ fn is_flake_ref(s: &str) -> bool {
 
 /// Build a flake ref's toplevel system closure and return the store path.
 fn build_flake(flake_ref: &str) -> PathBuf {
-    // nixosConfigurations.foo -> nixosConfigurations.foo.config.system.build.toplevel
     let toplevel = format!("{flake_ref}.config.system.build.toplevel");
     eprintln!("building: {flake_ref}");
     let output = match std::process::Command::new("nix")
@@ -114,6 +92,30 @@ fn build_flake(flake_ref: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Resolve a target string to a store path, building if it's a flake ref.
+fn resolve_target(target: &str) -> PathBuf {
+    if is_flake_ref(target) {
+        build_flake(target)
+    } else {
+        let p = PathBuf::from(target);
+        if !p.exists() {
+            eprintln!("error: {target} not found");
+            process::exit(1);
+        }
+        p
+    }
+}
+
+fn extract_or_exit(path: &std::path::Path) -> extract::SystemSummary {
+    match live::extract_system(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+    }
+}
+
 fn show_diff(
     before: &extract::SystemSummary,
     after: &extract::SystemSummary,
@@ -133,6 +135,15 @@ fn show_diff(
     }
 }
 
+fn label_or(summary: &extract::SystemSummary, fallback: &str) -> String {
+    let label = summary.machine.label();
+    if label.is_empty() {
+        fallback.into()
+    } else {
+        label
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -140,20 +151,16 @@ fn main() {
         Command::Preview { target } => {
             let target_str = target.unwrap_or_else(|| "./result".into());
 
-            let target_path = if is_flake_ref(&target_str) {
-                build_flake(&target_str)
-            } else {
-                let p = PathBuf::from(&target_str);
-                if !p.exists() {
-                    eprintln!("error: {target_str} not found");
-                    eprintln!();
-                    eprintln!("  build first:  nixos-rebuild build");
-                    eprintln!("  or specify:   nixdelta preview /path/to/result");
-                    eprintln!("  or a flake:   nixdelta preview .#nixosConfigurations.myhost");
-                    process::exit(1);
-                }
-                p
-            };
+            if !is_flake_ref(&target_str) && !PathBuf::from(&target_str).exists() {
+                eprintln!("error: {target_str} not found");
+                eprintln!();
+                eprintln!("  build first:  nixos-rebuild build");
+                eprintln!("  or specify:   nixdelta preview /path/to/result");
+                eprintln!("  or a flake:   nixdelta preview .#nixosConfigurations.myhost");
+                process::exit(1);
+            }
+
+            let target_path = resolve_target(&target_str);
 
             let current = match live::extract_live() {
                 Ok(s) => s,
@@ -162,30 +169,15 @@ fn main() {
                     process::exit(1);
                 }
             };
+            let pending = extract_or_exit(&target_path);
 
-            let pending = match live::extract_system(&target_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    process::exit(1);
-                }
-            };
-
-            let current_label = current.machine.label();
-            let pending_label = pending.machine.label();
+            let current_label = label_or(&current, "current");
+            let pending_label = label_or(&pending, "pending");
             show_diff(
                 &current,
                 &pending,
-                &if current_label.is_empty() {
-                    "current".into()
-                } else {
-                    current_label
-                },
-                &if pending_label.is_empty() {
-                    "pending".into()
-                } else {
-                    format!("{pending_label} (pending)")
-                },
+                &current_label,
+                &format!("{pending_label} (pending)"),
                 cli.json,
             );
         }
@@ -282,41 +274,17 @@ fn main() {
             before: before_ref,
             after: after_ref,
         } => {
-            let extractor_path = resolve_extractor(&cli.extractor);
+            let before_path = resolve_target(&before_ref);
+            let after_path = resolve_target(&after_ref);
 
-            eprintln!("evaluating: {before_ref}");
-            let before = match extract::extract(&before_ref, &extractor_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    process::exit(1);
-                }
-            };
+            let before = extract_or_exit(&before_path);
+            let after = extract_or_exit(&after_path);
 
-            eprintln!("evaluating: {after_ref}");
-            let after = match extract::extract(&after_ref, &extractor_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    process::exit(1);
-                }
-            };
-
-            let before_label = before.machine.label();
-            let after_label = after.machine.label();
             show_diff(
                 &before,
                 &after,
-                &if before_label.is_empty() {
-                    before_ref
-                } else {
-                    before_label
-                },
-                &if after_label.is_empty() {
-                    after_ref
-                } else {
-                    after_label
-                },
+                &label_or(&before, &before_ref),
+                &label_or(&after, &after_ref),
                 cli.json,
             );
         }
